@@ -1,0 +1,12 @@
+[
+  {
+    "orderId": "A1234",
+    "status": "in transit",
+    "eta": "Feb 10, 2026"
+  },
+  {
+    "orderId": "B5678",
+    "status": "delivered",
+    "eta": "Feb 3, 2026"
+  }
+]
