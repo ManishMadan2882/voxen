@@ -1,6 +1,4 @@
-from typing import Any, Dict
-
-from app.exceptions import LLMError
+from typing import Iterator
 
 
 class GeminiProvider:
@@ -8,22 +6,20 @@ class GeminiProvider:
         self.api_key = api_key
         self.model = model
 
-    def generate(self, prompt: str) -> Dict[str, Any]:
-        if not self.api_key:
-            raise LLMError("GEMINI_API_KEY not set")
-        try:
-            import google.generativeai as genai
-        except Exception as exc:
-            raise LLMError(f"Gemini SDK not installed: {exc}")
+    def stream(self, messages: list[dict]) -> Iterator[str]:
+        import google.generativeai as genai
+        genai.configure(api_key=self.api_key)
 
-        try:
-            genai.configure(api_key=self.api_key)
-            model = genai.GenerativeModel(self.model)
-            result = model.generate_content(prompt)
-            text = (result.text or "").strip()
-        except Exception as exc:
-            raise LLMError(str(exc))
+        system_parts = [m["content"] for m in messages if m["role"] == "system"]
+        chat_messages = [m for m in messages if m["role"] != "system"]
+        system_instruction = "\n".join(system_parts) or None
 
-        if not text:
-            raise LLMError("Gemini returned empty response")
-        return {"text": text}
+        model = genai.GenerativeModel(self.model, system_instruction=system_instruction)
+        history = [
+            {"role": m["role"], "parts": [m["content"]]}
+            for m in chat_messages[:-1]
+        ]
+        chat = model.start_chat(history=history)
+        for chunk in chat.send_message(chat_messages[-1]["content"], stream=True):
+            if chunk.text:
+                yield chunk.text

@@ -1,8 +1,13 @@
+from typing import Literal
 from pydantic import BaseModel
 
 
-class TurnRequest(BaseModel):
-    sessionId: str
-    text: str
-    orderId: str | None = None
-    last4: str | None = None
+class Message(BaseModel):
+    role: Literal['user', 'assistant', 'system']
+    content: str
+
+
+class StreamRequest(BaseModel):
+    messages: list[Message]
+    model: str | None = None
+    sources: list[str] | None = None

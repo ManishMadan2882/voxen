@@ -1,35 +1,29 @@
 import json
 import urllib.request
-from typing import Any, Dict
-
-from app.exceptions import LLMError
+from typing import Iterator
 
 
 class OllamaProvider:
-    def __init__(self, url: str, model: str):
-        self.url = url
+    def __init__(self, base_url: str, model: str):
+        self.base_url = base_url.rstrip('/')
         self.model = model
 
-    def generate(self, prompt: str) -> Dict[str, Any]:
-        payload = {
+    def stream(self, messages: list[dict]) -> Iterator[str]:
+        payload = json.dumps({
             "model": self.model,
-            "prompt": prompt,
-            "stream": False,
-        }
-        try:
-            data = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(
-                self.url,
-                data=data,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-        except Exception as exc:
-            raise LLMError(str(exc))
-
-        response_text = result.get("response", "").strip()
-        if not response_text:
-            raise LLMError("Ollama returned empty response")
-        return {"text": response_text}
+            "messages": messages,
+            "stream": True,
+        }).encode()
+        req = urllib.request.Request(
+            f"{self.base_url}/api/chat",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            for line in resp:
+                chunk = json.loads(line.decode())
+                if token := chunk.get("message", {}).get("content"):
+                    yield token
+                if chunk.get("done"):
+                    break
