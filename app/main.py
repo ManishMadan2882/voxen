@@ -1,20 +1,33 @@
 import json
+import logging
 import os
-from dotenv import load_dotenv
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from contextlib import asynccontextmanager
+from dotenv import load_dotenv, find_dotenv
 
-from models import StreamRequest
-from providers.ollama import OllamaProvider
-from providers.gemini import GeminiProvider
-from rag.router import router as rag_router
-from rag.embedder import embed
-from rag.store import search
+load_dotenv(find_dotenv(usecwd=False))
 
-load_dotenv()
+from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import StreamingResponse  # noqa: E402
 
-app = FastAPI()
+from db import engine, Base  # noqa: E402
+import rag.document_model  # noqa: F401, E402 — registers ORM model with Base
+from models import StreamRequest  # noqa: E402
+from providers.ollama import OllamaProvider  # noqa: E402
+from providers.gemini import GeminiProvider  # noqa: E402
+from rag.router import router as rag_router  # noqa: E402
+from rag.embedder import embed  # noqa: E402
+from rag.store import search  # noqa: E402
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.include_router(rag_router)
 
@@ -57,13 +70,17 @@ def stream(req: StreamRequest):
     rag_context = ""
     if recent:
         try:
-            hits = search(embed(" ".join(recent)), source_filters=req.sources or None)
+            hits = search(
+                embed(" ".join(recent)),
+                id_filters=req.ids or None,
+                score_threshold=0.4 if req.ids else 0.55,
+            )
             if hits:
                 rag_context = "\n\nRelevant knowledge base context:\n" + "\n---\n".join(
                     f"[{h['source']} p.{h['page']}] {h['text']}" for h in hits
                 )
         except Exception:
-            pass
+            logging.exception("RAG retrieval failed (ids=%s)", req.ids)
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT + rag_context}] + [m.model_dump() for m in req.messages]
 

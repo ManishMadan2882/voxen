@@ -5,3 +5,5 @@ python-dotenv==1.0.1
 qdrant-client==1.17.1
 pypdf==4.3.1
 python-multipart==0.0.9
+sqlalchemy[asyncio]==2.0.30
+asyncpg==0.29.0

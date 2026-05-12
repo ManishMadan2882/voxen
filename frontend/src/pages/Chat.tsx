@@ -7,7 +7,7 @@ type Message = { role: 'user' | 'assistant'; content: string; sources?: Source[]
 type NavItem = 'demo' | 'rag'
 type KbMode = 'pdf' | 'text'
 type UploadState = 'idle' | 'uploading' | 'done' | 'error'
-type Doc = { file: string; chunks: number }
+type Doc = { id: string; file: string; chunks: number }
 
 const MODELS = ['llama3.2', 'gemma3']
 
@@ -26,6 +26,7 @@ export const Chat = () => {
     const [status, setStatus] = useState<Status>('idle')
     const [liveTranscript, setLiveTranscript] = useState('')
     const [model, setModel] = useState('llama3.2')
+    const [selectedSources, setSelectedSources] = useState<string[]>([])
 
     // ── rag state ────────────────────────────────────────────────
     const [docs, setDocs] = useState<Doc[]>([])
@@ -37,11 +38,6 @@ export const Chat = () => {
     const [kbSource, setKbSource] = useState('')
     const [kbState, setKbState] = useState<UploadState>('idle')
     const [kbMsg, setKbMsg] = useState('')
-    const [selectedDoc, setSelectedDoc] = useState<string | null>(null)
-    const [kbMessages, setKbMessages] = useState<Message[]>([])
-    const [kbChatInput, setKbChatInput] = useState('')
-    const [kbStreaming, setKbStreaming] = useState(false)
-    const kbBottomRef = useRef<HTMLDivElement>(null)
 
     const messagesRef = useRef<Message[]>([])
     const finalTranscriptRef = useRef('')
@@ -49,7 +45,6 @@ export const Chat = () => {
 
     useEffect(() => { messagesRef.current = messages }, [messages])
     useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, liveTranscript])
-    useEffect(() => { kbBottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [kbMessages])
 
     const fetchDocs = useCallback(async () => {
         try {
@@ -109,54 +104,6 @@ export const Chat = () => {
         }
     }
 
-    // ── KB chat ──────────────────────────────────────────────────
-    const sendKbMessage = async () => {
-        if (!kbChatInput.trim() || kbStreaming || !selectedDoc) return
-        const text = kbChatInput.trim()
-        setKbChatInput('')
-        const history: Message[] = [...kbMessages, { role: 'user', content: text }]
-        setKbMessages([...history, { role: 'assistant', content: '' }])
-        setKbStreaming(true)
-
-        try {
-            const res = await fetch('http://localhost:8000/rag/query', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ messages: history, source: selectedDoc, model }),
-            })
-            const reader = res.body!.getReader()
-            const decoder = new TextDecoder()
-            let buffer = ''
-            let fullResponse = ''
-            let eventType = 'message'
-
-            while (true) {
-                const { done, value } = await reader.read()
-                if (done) break
-                buffer += decoder.decode(value, { stream: true })
-                const lines = buffer.split('\n')
-                buffer = lines.pop()!
-                for (const line of lines) {
-                    if (line.startsWith('event: ')) { eventType = line.slice(7).trim(); continue }
-                    if (!line.startsWith('data: ')) continue
-                    const data = line.slice(6)
-                    if (eventType === 'sources') {
-                        const sources: Source[] = JSON.parse(data)
-                        setKbMessages(prev => { const m = [...prev]; m[m.length - 1] = { ...m[m.length - 1], sources }; return m })
-                        eventType = 'message'; continue
-                    }
-                    if (data === '[DONE]') break
-                    fullResponse += data
-                    setKbMessages(prev => { const m = [...prev]; m[m.length - 1] = { ...m[m.length - 1], content: fullResponse }; return m })
-                }
-            }
-        } catch {
-            setKbMessages(prev => { const m = [...prev]; m[m.length - 1] = { ...m[m.length - 1], content: 'Error: failed to connect.' }; return m })
-        } finally {
-            setKbStreaming(false)
-        }
-    }
-
     // ── shared LLM call ──────────────────────────────────────────
     const send = async (text: string) => {
         if (!text.trim() || status !== 'idle') return
@@ -170,7 +117,11 @@ export const Chat = () => {
             const res = await fetch('http://localhost:8000/stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ messages: history, model }),
+                body: JSON.stringify({
+                    messages: history,
+                    model,
+                    ids: selectedSources.length > 0 ? selectedSources : undefined,
+                }),
             })
 
             const reader = res.body!.getReader()
@@ -280,6 +231,11 @@ export const Chat = () => {
         speaking: 'Speaking — tap to stop',
     }
 
+    const toggleSource = (id: string) =>
+        setSelectedSources(prev =>
+            prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]
+        )
+
     return (
         <div className="flex h-screen bg-gray-950 text-white">
 
@@ -293,7 +249,7 @@ export const Chat = () => {
                 </div>
 
                 {/* Nav items */}
-                <nav className="flex-1 px-2 py-3 space-y-0.5">
+                <nav className="px-2 py-3 space-y-0.5">
                     {NAV.map(item => (
                         <button
                             key={item.id}
@@ -310,8 +266,38 @@ export const Chat = () => {
                     ))}
                 </nav>
 
+                {/* KB selector */}
+                {docs.length > 0 && (
+                    <div className="flex-1 overflow-y-auto px-4 py-3 border-t border-white/8">
+                        <p className="text-white/30 text-xs mb-2 uppercase tracking-wide">Knowledge Base</p>
+                        <div className="space-y-1.5">
+                            {docs.map(doc => {
+                                const checked = selectedSources.includes(doc.id)
+                                return (
+                                    <label key={doc.id} className="flex items-start gap-2 cursor-pointer group">
+                                        <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onChange={() => toggleSource(doc.id)}
+                                            className="mt-0.5 accent-purple-500 w-3.5 h-3.5 shrink-0 cursor-pointer"
+                                        />
+                                        <span className={`text-xs leading-snug truncate transition-colors ${checked ? 'text-purple-300' : 'text-white/40 group-hover:text-white/60'}`}>
+                                            {doc.file}
+                                        </span>
+                                    </label>
+                                )
+                            })}
+                        </div>
+                        <p className="text-white/20 text-xs mt-2.5">
+                            {selectedSources.length === 0
+                                ? 'All sources active'
+                                : `${selectedSources.length} selected`}
+                        </p>
+                    </div>
+                )}
+
                 {/* Model selector */}
-                <div className="px-4 py-4 border-t border-white/8">
+                <div className="px-4 py-4 border-t border-white/8 shrink-0">
                     <p className="text-white/30 text-xs mb-1.5">Model</p>
                     <select
                         className="w-full bg-white/5 border border-white/10 text-white/70 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none cursor-pointer"
@@ -458,32 +444,26 @@ export const Chat = () => {
                 )}
 
                 {/* ── RAG panel ── */}
-                {nav === 'rag' && !selectedDoc && (
+                {nav === 'rag' && (
                     <div className="flex-1 flex flex-col min-h-0">
 
                         {/* Source list */}
                         <div className="flex-1 overflow-y-auto px-6 py-6 max-w-2xl w-full mx-auto">
                             {docs.length > 0 ? (
                                 <div>
-                                    <p className="text-white/30 text-xs mb-3 uppercase tracking-wide">
-                                        Select a knowledge base to chat with
-                                    </p>
+                                    <p className="text-white/30 text-xs mb-3 uppercase tracking-wide">Indexed documents</p>
                                     <div className="space-y-2">
                                         {docs.map(doc => (
-                                            <button
+                                            <div
                                                 key={doc.file}
-                                                onClick={() => { setSelectedDoc(doc.file); setKbMessages([]) }}
-                                                className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-white/5 border border-white/8 hover:border-purple-500/40 hover:bg-purple-500/5 transition-all group"
+                                                className="flex items-center justify-between px-4 py-3 rounded-xl bg-white/5 border border-white/8"
                                             >
                                                 <div className="flex items-center gap-3 min-w-0">
                                                     <span className="text-purple-400 text-sm shrink-0">⬡</span>
-                                                    <span className="text-white/70 text-sm truncate group-hover:text-white transition-colors">{doc.file}</span>
+                                                    <span className="text-white/70 text-sm truncate">{doc.file}</span>
                                                 </div>
-                                                <div className="flex items-center gap-3 shrink-0 ml-3">
-                                                    <span className="text-white/25 text-xs">{doc.chunks} chunks</span>
-                                                    <span className="text-white/20 group-hover:text-purple-400 transition-colors">→</span>
-                                                </div>
-                                            </button>
+                                                <span className="text-white/25 text-xs shrink-0 ml-3">{doc.chunks} chunks</span>
+                                            </div>
                                         ))}
                                     </div>
                                 </div>
@@ -554,79 +534,6 @@ export const Chat = () => {
                                     {kbMsg && <p className={`text-xs ${kbState === 'error' ? 'text-red-400' : 'text-green-400'}`}>{kbMsg}</p>}
                                 </div>
                             )}
-                        </div>
-                    </div>
-                )}
-
-                {/* ── KB chat view ── */}
-                {nav === 'rag' && selectedDoc && (
-                    <div className="flex-1 flex flex-col min-h-0">
-
-                        {/* Chat header with back button */}
-                        <div className="shrink-0 px-6 py-3 border-b border-white/8 flex items-center gap-3">
-                            <button
-                                onClick={() => setSelectedDoc(null)}
-                                className="text-white/40 hover:text-white/80 transition-colors text-sm"
-                            >← Back</button>
-                            <div className="w-px h-4 bg-white/10" />
-                            <span className="text-purple-300 text-xs">⬡</span>
-                            <span className="text-white/70 text-sm truncate">{selectedDoc}</span>
-                        </div>
-
-                        {/* Messages */}
-                        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-3">
-                            {kbMessages.length === 0 && (
-                                <div className="flex items-center justify-center h-full">
-                                    <p className="text-white/20 text-sm">Ask anything about this document</p>
-                                </div>
-                            )}
-                            {kbMessages.map((msg, i) => (
-                                <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                                    <div className={`rounded-2xl px-4 py-2.5 max-w-[80%] text-sm leading-relaxed whitespace-pre-wrap ${
-                                        msg.role === 'user'
-                                            ? 'bg-linear-to-br from-purple-600 to-blue-600 text-white shadow-lg shadow-purple-500/20'
-                                            : 'bg-white/5 text-white/85 border border-white/10'
-                                    }`}>
-                                        {msg.content || (kbStreaming && i === kbMessages.length - 1
-                                            ? <span className="animate-pulse text-purple-400">▌</span>
-                                            : ''
-                                        )}
-                                    </div>
-                                    {msg.sources && msg.sources.length > 0 && (
-                                        <div className="flex flex-wrap gap-1.5 mt-1.5 max-w-[80%]">
-                                            {msg.sources.map((s, j) => (
-                                                <span key={j} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-500/10 border border-purple-500/20 text-purple-300 text-xs">
-                                                    <span className="opacity-50">⬡</span>
-                                                    p.{s.page}
-                                                    {s.score != null && <span className="opacity-40 ml-0.5">{s.score}</span>}
-                                                </span>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
-                            <div ref={kbBottomRef} />
-                        </div>
-
-                        {/* Input */}
-                        <div className="shrink-0 px-6 pb-6 pt-3">
-                            <div className="flex gap-2 items-center p-2 rounded-2xl bg-white/5 border border-white/10 focus-within:border-purple-500/50 transition-colors">
-                                <input
-                                    className="flex-1 bg-transparent text-white placeholder-white/30 text-sm px-2 py-1.5 focus:outline-none"
-                                    type="text"
-                                    value={kbChatInput}
-                                    onChange={e => setKbChatInput(e.target.value)}
-                                    onKeyDown={e => e.key === 'Enter' && sendKbMessage()}
-                                    placeholder={`Ask about ${selectedDoc}…`}
-                                    disabled={kbStreaming}
-                                    autoFocus
-                                />
-                                <button
-                                    className="bg-linear-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white text-sm font-medium rounded-xl px-4 py-1.5 disabled:opacity-40 transition-all"
-                                    onClick={sendKbMessage}
-                                    disabled={kbStreaming || !kbChatInput.trim()}
-                                >{kbStreaming ? '...' : 'Ask'}</button>
-                            </div>
                         </div>
                     </div>
                 )}

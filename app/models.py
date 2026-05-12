@@ -10,4 +10,4 @@ class Message(BaseModel):
 class StreamRequest(BaseModel):
     messages: list[Message]
     model: str | None = None
-    sources: list[str] | None = None
+    ids: list[str] | None = None

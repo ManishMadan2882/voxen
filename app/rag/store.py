@@ -36,21 +36,21 @@ def search(
     vector: list[float],
     limit: int = 4,
     score_threshold: float = 0.55,
-    source_filters: list[str] | None = None,
+    id_filters: list[str] | None = None,
 ) -> list[dict]:
     flt = (
-        Filter(must=[FieldCondition(key="source", match=MatchAny(any=source_filters))])
-        if source_filters else None
+        Filter(must=[FieldCondition(key="doc_id", match=MatchAny(any=id_filters))])
+        if id_filters else None
     )
-    results = get_client().search(
+    response = get_client().query_points(
         collection_name=COLLECTION,
-        query_vector=vector,
+        query=vector,
         query_filter=flt,
         limit=limit,
         score_threshold=score_threshold,
         with_payload=True,
     )
-    return [{"score": round(r.score, 3), **r.payload} for r in results]
+    return [{"score": round(r.score, 3), **r.payload} for r in response.points]
 
 
 def list_sources() -> list[dict]:
