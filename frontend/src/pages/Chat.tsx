@@ -1,19 +1,24 @@
 import { useState, useRef, useEffect, useCallback } from "react"
+import { useNavigate } from "react-router-dom"
 
 type Mode = 'voice' | 'chat'
 type Status = 'idle' | 'listening' | 'processing' | 'speaking'
 type Source = { source: string; page: number; score: number | null }
 type Message = { role: 'user' | 'assistant'; content: string; sources?: Source[] }
-type NavItem = 'demo' | 'rag'
+type NavItem = 'demo' | 'rag' | 'prompts' | 'agents'
 type KbMode = 'pdf' | 'text'
 type UploadState = 'idle' | 'uploading' | 'done' | 'error'
 type Doc = { id: string; file: string; chunks: number }
+type CustomPrompt = { id: string; name: string; content: string; created_at: string }
+type Agent = { id: string; name: string; prompt_id: string; knowledge_base_id: string; created_at: string }
 
 const MODELS = ['llama3.2', 'gemma3']
 
 const NAV: { id: NavItem; label: string; icon: string }[] = [
-    { id: 'demo', label: 'Demo', icon: '◎' },
-    { id: 'rag',  label: 'RAG',  icon: '⬡' },
+    { id: 'demo',    label: 'Demo',    icon: '◎' },
+    { id: 'rag',     label: 'RAG',     icon: '⬡' },
+    { id: 'prompts', label: 'Prompts', icon: '✎' },
+    { id: 'agents',  label: 'Agents',  icon: '☄' },
 ]
 
 export const Chat = () => {
@@ -39,6 +44,24 @@ export const Chat = () => {
     const [kbState, setKbState] = useState<UploadState>('idle')
     const [kbMsg, setKbMsg] = useState('')
 
+    // ── prompts state ────────────────────────────────────────────
+    const [prompts, setPrompts] = useState<CustomPrompt[]>([])
+    const [selectedPromptId, setSelectedPromptId] = useState<string>('')
+    const [promptName, setPromptName] = useState('')
+    const [promptContent, setPromptContent] = useState('')
+    const [promptState, setPromptState] = useState<UploadState>('idle')
+    const [promptMsg, setPromptMsg] = useState('')
+
+    // ── agents state ─────────────────────────────────────────────
+    const [agents, setAgents] = useState<Agent[]>([])
+    const [agentName, setAgentName] = useState('')
+    const [agentPromptId, setAgentPromptId] = useState('')
+    const [agentKbId, setAgentKbId] = useState('')
+    const [agentState, setAgentState] = useState<UploadState>('idle')
+    const [agentMsg, setAgentMsg] = useState('')
+
+    const navigate = useNavigate()
+
     const messagesRef = useRef<Message[]>([])
     const finalTranscriptRef = useRef('')
     const bottomRef = useRef<HTMLDivElement>(null)
@@ -54,6 +77,95 @@ export const Chat = () => {
     }, [])
 
     useEffect(() => { fetchDocs() }, [fetchDocs])
+
+    const fetchPrompts = useCallback(async () => {
+        try {
+            const res = await fetch('http://localhost:8000/prompts')
+            const data: CustomPrompt[] = await res.json()
+            setPrompts(data)
+            setSelectedPromptId(prev => (prev && data.some(p => p.id === prev) ? prev : ''))
+        } catch { /* backend may not be ready yet */ }
+    }, [])
+
+    useEffect(() => { fetchPrompts() }, [fetchPrompts])
+
+    const handleCreatePrompt = async () => {
+        const name = promptName.trim()
+        const content = promptContent.trim()
+        if (!name || !content) return
+        setPromptState('uploading')
+        setPromptMsg('Saving…')
+        try {
+            const res = await fetch('http://localhost:8000/prompts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, content }),
+            })
+            if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed') }
+            setPromptName('')
+            setPromptContent('')
+            setPromptState('done')
+            setPromptMsg('Saved')
+            fetchPrompts()
+        } catch (e: any) {
+            setPromptState('error')
+            setPromptMsg(e.message ?? 'Failed')
+        }
+    }
+
+    const handleDeletePrompt = async (id: string) => {
+        try {
+            const res = await fetch(`http://localhost:8000/prompts/${id}`, { method: 'DELETE' })
+            if (!res.ok) return
+            if (selectedPromptId === id) setSelectedPromptId('')
+            fetchPrompts()
+        } catch { /* noop */ }
+    }
+
+    const fetchAgents = useCallback(async () => {
+        try {
+            const res = await fetch('http://localhost:8000/agents')
+            setAgents(await res.json())
+        } catch { /* backend may not be ready yet */ }
+    }, [])
+
+    useEffect(() => { fetchAgents() }, [fetchAgents])
+
+    const handleCreateAgent = async () => {
+        const name = agentName.trim()
+        if (!name || !agentPromptId || !agentKbId) {
+            setAgentState('error')
+            setAgentMsg('Name, prompt and knowledge base are required.')
+            return
+        }
+        setAgentState('uploading')
+        setAgentMsg('Saving…')
+        try {
+            const res = await fetch('http://localhost:8000/agents', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, prompt_id: agentPromptId, knowledge_base_id: agentKbId }),
+            })
+            if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed') }
+            setAgentName('')
+            setAgentPromptId('')
+            setAgentKbId('')
+            setAgentState('done')
+            setAgentMsg('Saved')
+            fetchAgents()
+        } catch (e: any) {
+            setAgentState('error')
+            setAgentMsg(e.message ?? 'Failed')
+        }
+    }
+
+    const handleDeleteAgent = async (id: string) => {
+        try {
+            const res = await fetch(`http://localhost:8000/agents/${id}`, { method: 'DELETE' })
+            if (!res.ok) return
+            fetchAgents()
+        } catch { /* noop */ }
+    }
 
     const handleUpload = async (file: File) => {
         if (!file.name.toLowerCase().endsWith('.pdf')) {
@@ -121,6 +233,7 @@ export const Chat = () => {
                     messages: history,
                     model,
                     ids: selectedSources.length > 0 ? selectedSources : undefined,
+                    prompt_id: selectedPromptId || undefined,
                 }),
             })
 
@@ -266,8 +379,8 @@ export const Chat = () => {
                     ))}
                 </nav>
 
-                {/* KB selector */}
-                {docs.length > 0 && (
+                {/* KB selector — hidden in agents view (agent metadata takes priority) */}
+                {nav !== 'agents' && docs.length > 0 && (
                     <div className="flex-1 overflow-y-auto px-4 py-3 border-t border-white/8">
                         <p className="text-white/30 text-xs mb-2 uppercase tracking-wide">Knowledge Base</p>
                         <div className="space-y-1.5">
@@ -296,6 +409,24 @@ export const Chat = () => {
                     </div>
                 )}
 
+                {/* Prompt selector — hidden in agents view (agent metadata takes priority) */}
+                {nav !== 'agents' && (
+                    <div className="px-4 py-4 border-t border-white/8 shrink-0">
+                        <p className="text-white/30 text-xs mb-1.5">Prompt</p>
+                        <select
+                            className="w-full bg-white/5 border border-white/10 text-white/70 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none cursor-pointer"
+                            value={selectedPromptId}
+                            onChange={e => setSelectedPromptId(e.target.value)}
+                            disabled={status !== 'idle'}
+                        >
+                            <option value="" className="bg-gray-900">Default</option>
+                            {prompts.map(p => (
+                                <option key={p.id} value={p.id} className="bg-gray-900">{p.name}</option>
+                            ))}
+                        </select>
+                    </div>
+                )}
+
                 {/* Model selector */}
                 <div className="px-4 py-4 border-t border-white/8 shrink-0">
                     <p className="text-white/30 text-xs mb-1.5">Model</p>
@@ -316,7 +447,10 @@ export const Chat = () => {
                 {/* Panel header */}
                 <div className="px-6 py-4 border-b border-white/8 shrink-0">
                     <h2 className="text-sm font-medium text-white/60">
-                        {nav === 'demo' ? 'Demo' : 'RAG — Knowledge Base'}
+                        {nav === 'demo' ? 'Demo'
+                            : nav === 'rag' ? 'RAG — Knowledge Base'
+                            : nav === 'prompts' ? 'Prompts'
+                            : 'Agents'}
                     </h2>
                 </div>
 
@@ -533,6 +667,180 @@ export const Chat = () => {
                                     </div>
                                     {kbMsg && <p className={`text-xs ${kbState === 'error' ? 'text-red-400' : 'text-green-400'}`}>{kbMsg}</p>}
                                 </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                {/* ── Prompts panel ── */}
+                {nav === 'prompts' && (
+                    <div className="flex-1 flex flex-col min-h-0">
+
+                        {/* Saved prompts */}
+                        <div className="flex-1 overflow-y-auto px-6 py-6 max-w-2xl w-full mx-auto">
+                            {prompts.length > 0 ? (
+                                <div>
+                                    <p className="text-white/30 text-xs mb-3 uppercase tracking-wide">Saved prompts</p>
+                                    <div className="space-y-2">
+                                        {prompts.map(p => {
+                                            const active = selectedPromptId === p.id
+                                            return (
+                                                <div
+                                                    key={p.id}
+                                                    className={`px-4 py-3 rounded-xl border ${active ? 'bg-purple-500/10 border-purple-500/30' : 'bg-white/5 border-white/8'}`}
+                                                >
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <div className="flex items-center gap-3 min-w-0">
+                                                            <span className="text-purple-400 text-sm shrink-0">✎</span>
+                                                            <span className="text-white/80 text-sm truncate">{p.name}</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-2 shrink-0">
+                                                            <button
+                                                                onClick={() => setSelectedPromptId(active ? '' : p.id)}
+                                                                className={`text-xs px-2.5 py-1 rounded-md border transition-colors ${active ? 'border-purple-500/40 text-purple-300' : 'border-white/10 text-white/50 hover:text-white/80'}`}
+                                                            >{active ? 'Selected' : 'Select'}</button>
+                                                            <button
+                                                                onClick={() => handleDeletePrompt(p.id)}
+                                                                className="text-xs px-2.5 py-1 rounded-md border border-white/10 text-white/40 hover:text-red-400 hover:border-red-400/30 transition-colors"
+                                                            >Delete</button>
+                                                        </div>
+                                                    </div>
+                                                    <p className="text-white/40 text-xs mt-2 line-clamp-3 whitespace-pre-wrap">{p.content}</p>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                    <p className="text-white/20 text-xs mt-3">
+                                        {selectedPromptId ? 'Custom prompt active' : 'Default prompt active'}
+                                    </p>
+                                </div>
+                            ) : (
+                                <div className="flex items-center justify-center h-full">
+                                    <p className="text-white/20 text-sm">No custom prompts yet — add one below</p>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* New prompt form */}
+                        <div className="shrink-0 border-t border-white/8 px-6 py-4 max-w-2xl w-full mx-auto space-y-2">
+                            <input
+                                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white/60 placeholder-white/20 focus:outline-none focus:border-purple-500/40"
+                                placeholder="Prompt name (e.g. concise-support)"
+                                value={promptName}
+                                onChange={e => setPromptName(e.target.value)}
+                            />
+                            <div className="flex gap-2 items-end p-2 rounded-2xl bg-white/5 border border-white/10 focus-within:border-purple-500/40 transition-colors">
+                                <textarea
+                                    className="flex-1 bg-transparent text-white/80 placeholder-white/25 text-sm px-2 py-1 focus:outline-none resize-none leading-relaxed"
+                                    rows={3}
+                                    placeholder="System instructions for the assistant…"
+                                    value={promptContent}
+                                    onChange={e => setPromptContent(e.target.value)}
+                                    onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleCreatePrompt() }}
+                                />
+                                <button
+                                    className="bg-linear-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white text-xs font-medium rounded-xl px-3 py-1.5 self-end disabled:opacity-40 transition-all shrink-0"
+                                    onClick={handleCreatePrompt}
+                                    disabled={!promptName.trim() || !promptContent.trim() || promptState === 'uploading'}
+                                >{promptState === 'uploading' ? '⟳' : 'Save'}</button>
+                            </div>
+                            {promptMsg && <p className={`text-xs ${promptState === 'error' ? 'text-red-400' : 'text-green-400'}`}>{promptMsg}</p>}
+                        </div>
+                    </div>
+                )}
+
+                {/* ── Agents panel ── */}
+                {nav === 'agents' && (
+                    <div className="flex-1 flex flex-col min-h-0">
+
+                        {/* Saved agents */}
+                        <div className="flex-1 overflow-y-auto px-6 py-6 max-w-2xl w-full mx-auto">
+                            {agents.length > 0 ? (
+                                <div>
+                                    <p className="text-white/30 text-xs mb-3 uppercase tracking-wide">Agents</p>
+                                    <div className="space-y-2">
+                                        {agents.map(a => {
+                                            const promptLabel = prompts.find(p => p.id === a.prompt_id)?.name ?? a.prompt_id
+                                            const kbLabel = docs.find(d => d.id === a.knowledge_base_id)?.file ?? a.knowledge_base_id
+                                            return (
+                                                <div
+                                                    key={a.id}
+                                                    className="px-4 py-3 rounded-xl border bg-white/5 border-white/8"
+                                                >
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <div className="flex items-center gap-3 min-w-0">
+                                                            <span className="text-purple-400 text-sm shrink-0">☄</span>
+                                                            <span className="text-white/80 text-sm truncate">{a.name}</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-2 shrink-0">
+                                                            <button
+                                                                onClick={() => navigate(`/agents/${a.id}`)}
+                                                                className="text-xs px-2.5 py-1 rounded-md border border-purple-500/40 text-purple-300 hover:bg-purple-500/10 transition-colors"
+                                                            >Open</button>
+                                                            <button
+                                                                onClick={() => handleDeleteAgent(a.id)}
+                                                                className="text-xs px-2.5 py-1 rounded-md border border-white/10 text-white/40 hover:text-red-400 hover:border-red-400/30 transition-colors"
+                                                            >Delete</button>
+                                                        </div>
+                                                    </div>
+                                                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-white/40">
+                                                        <span>Prompt: <span className="text-white/60">{promptLabel}</span></span>
+                                                        <span>KB: <span className="text-white/60">{kbLabel}</span></span>
+                                                    </div>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="flex items-center justify-center h-full">
+                                    <p className="text-white/20 text-sm">No agents yet — create one below</p>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* New agent form */}
+                        <div className="shrink-0 border-t border-white/8 px-6 py-4 max-w-2xl w-full mx-auto space-y-2">
+                            <input
+                                className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white/60 placeholder-white/20 focus:outline-none focus:border-purple-500/40"
+                                placeholder="Agent name (e.g. support-bot)"
+                                value={agentName}
+                                onChange={e => setAgentName(e.target.value)}
+                            />
+                            <div className="grid grid-cols-2 gap-2">
+                                <select
+                                    className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white/70 focus:outline-none focus:border-purple-500/40 cursor-pointer"
+                                    value={agentPromptId}
+                                    onChange={e => setAgentPromptId(e.target.value)}
+                                >
+                                    <option value="" className="bg-gray-900">Select prompt…</option>
+                                    {prompts.map(p => (
+                                        <option key={p.id} value={p.id} className="bg-gray-900">{p.name}</option>
+                                    ))}
+                                </select>
+                                <select
+                                    className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white/70 focus:outline-none focus:border-purple-500/40 cursor-pointer"
+                                    value={agentKbId}
+                                    onChange={e => setAgentKbId(e.target.value)}
+                                >
+                                    <option value="" className="bg-gray-900">Select knowledge base…</option>
+                                    {docs.map(d => (
+                                        <option key={d.id} value={d.id} className="bg-gray-900">{d.file}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="flex justify-end">
+                                <button
+                                    className="bg-linear-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white text-xs font-medium rounded-xl px-3 py-1.5 disabled:opacity-40 transition-all"
+                                    onClick={handleCreateAgent}
+                                    disabled={!agentName.trim() || !agentPromptId || !agentKbId || agentState === 'uploading'}
+                                >{agentState === 'uploading' ? '⟳' : 'Create agent'}</button>
+                            </div>
+                            {agentMsg && <p className={`text-xs ${agentState === 'error' ? 'text-red-400' : 'text-green-400'}`}>{agentMsg}</p>}
+                            {(prompts.length === 0 || docs.length === 0) && (
+                                <p className="text-white/30 text-xs">
+                                    {prompts.length === 0 && 'Create a prompt first.'} {docs.length === 0 && 'Add a knowledge base entry first.'}
+                                </p>
                             )}
                         </div>
                     </div>

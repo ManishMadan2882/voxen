@@ -11,3 +11,4 @@ class StreamRequest(BaseModel):
     messages: list[Message]
     model: str | None = None
     ids: list[str] | None = None
+    prompt_id: str | None = None

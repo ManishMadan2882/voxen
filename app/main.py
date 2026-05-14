@@ -6,13 +6,25 @@ from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv(usecwd=False))
 
-from fastapi import FastAPI  # noqa: E402
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s | %(message)s",
+)
+
+from fastapi import Depends, FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import StreamingResponse  # noqa: E402
+from sqlalchemy import select  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
-from db import engine, Base  # noqa: E402
+from db import engine, Base, get_db  # noqa: E402
 import rag.document_model  # noqa: F401, E402 — registers ORM model with Base
+import prompts.prompt_model  # noqa: F401, E402 — registers ORM model with Base
+import agents.agent_model  # noqa: F401, E402 — registers ORM model with Base
 from models import StreamRequest  # noqa: E402
+from prompts.prompt_model import Prompt  # noqa: E402
+from prompts.router import router as prompts_router  # noqa: E402
+from agents.router import router as agents_router  # noqa: E402
 from providers.ollama import OllamaProvider  # noqa: E402
 from providers.gemini import GeminiProvider  # noqa: E402
 from rag.router import router as rag_router  # noqa: E402
@@ -30,6 +42,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 app.include_router(rag_router)
+app.include_router(prompts_router)
+app.include_router(agents_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -61,8 +75,15 @@ SYSTEM_PROMPT = (
 
 
 @app.post("/stream")
-def stream(req: StreamRequest):
+async def stream(req: StreamRequest, db: AsyncSession = Depends(get_db)):
     provider = _get_provider(req.model)
+
+    system_prompt = SYSTEM_PROMPT
+    if req.prompt_id:
+        result = await db.execute(select(Prompt.content).where(Prompt.id == req.prompt_id))
+        custom = result.scalar_one_or_none()
+        if custom:
+            system_prompt = custom
 
     # RAG: build query from last 3 user turns for better context recall
     recent = [m.content for m in req.messages if m.role == "user"][-3:]
@@ -82,7 +103,7 @@ def stream(req: StreamRequest):
         except Exception:
             logging.exception("RAG retrieval failed (ids=%s)", req.ids)
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT + rag_context}] + [m.model_dump() for m in req.messages]
+    messages = [{"role": "system", "content": system_prompt + rag_context}] + [m.model_dump() for m in req.messages]
 
     def event_stream():
         if hits:
