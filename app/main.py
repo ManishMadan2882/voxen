@@ -18,6 +18,7 @@ from sqlalchemy import select  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
 from db import engine, Base, get_db  # noqa: E402
+import users.user_model  # noqa: F401, E402 — registers ORM model with Base
 import rag.document_model  # noqa: F401, E402 — registers ORM model with Base
 import prompts.prompt_model  # noqa: F401, E402 — registers ORM model with Base
 import agents.agent_model  # noqa: F401, E402 — registers ORM model with Base
@@ -30,6 +31,8 @@ from providers.gemini import GeminiProvider  # noqa: E402
 from rag.router import router as rag_router  # noqa: E402
 from rag.embedder import embed  # noqa: E402
 from rag.store import search  # noqa: E402
+from users.auth import get_current_user  # noqa: E402
+from users.user_model import User  # noqa: E402
 
 
 @asynccontextmanager
@@ -75,12 +78,18 @@ SYSTEM_PROMPT = (
 
 
 @app.post("/stream")
-async def stream(req: StreamRequest, db: AsyncSession = Depends(get_db)):
+async def stream(
+    req: StreamRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     provider = _get_provider(req.model)
 
     system_prompt = SYSTEM_PROMPT
     if req.prompt_id:
-        result = await db.execute(select(Prompt.content).where(Prompt.id == req.prompt_id))
+        result = await db.execute(
+            select(Prompt.content).where(Prompt.id == req.prompt_id, Prompt.user_id == current_user.id)
+        )
         custom = result.scalar_one_or_none()
         if custom:
             system_prompt = custom

@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
 from prompts.prompt_model import Prompt
+from users.auth import get_current_user
+from users.user_model import User
 
 router = APIRouter(prefix="/prompts")
 
@@ -25,18 +27,27 @@ def _serialize(p: Prompt) -> dict:
 
 
 @router.get("")
-async def list_prompts(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Prompt).order_by(Prompt.created_at.desc()))
+async def list_prompts(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(Prompt).where(Prompt.user_id == current_user.id).order_by(Prompt.created_at.desc())
+    )
     return [_serialize(p) for p in result.scalars().all()]
 
 
 @router.post("")
-async def create_prompt(body: PromptPayload, db: AsyncSession = Depends(get_db)):
+async def create_prompt(
+    body: PromptPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     name = body.name.strip()
     content = body.content.strip()
     if not name or not content:
         raise HTTPException(status_code=400, detail="Name and content are required.")
-    prompt = Prompt(name=name, content=content)
+    prompt = Prompt(name=name, content=content, user_id=current_user.id)
     db.add(prompt)
     try:
         await db.commit()
@@ -48,8 +59,14 @@ async def create_prompt(body: PromptPayload, db: AsyncSession = Depends(get_db))
 
 
 @router.delete("/{prompt_id}")
-async def delete_prompt(prompt_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(delete(Prompt).where(Prompt.id == prompt_id))
+async def delete_prompt(
+    prompt_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        delete(Prompt).where(Prompt.id == prompt_id, Prompt.user_id == current_user.id)
+    )
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="Prompt not found.")
     await db.commit()

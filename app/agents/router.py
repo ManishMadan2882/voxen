@@ -17,6 +17,8 @@ from providers.gemini import GeminiProvider
 from providers.ollama import OllamaProvider
 from rag.embedder import embed
 from rag.store import search
+from users.auth import get_current_user
+from users.user_model import User
 
 router = APIRouter(prefix="/agents")
 
@@ -56,24 +58,40 @@ def _get_provider(model_override: str | None = None):
 
 
 @router.get("")
-async def list_agents(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Agent).order_by(Agent.created_at.desc()))
+async def list_agents(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(Agent).where(Agent.user_id == current_user.id).order_by(Agent.created_at.desc())
+    )
     return [_serialize(a) for a in result.scalars().all()]
 
 
 @router.post("")
-async def create_agent(body: AgentPayload, db: AsyncSession = Depends(get_db)):
+async def create_agent(
+    body: AgentPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     name = body.name.strip()
     prompt_id = body.prompt_id.strip()
     knowledge_base_id = body.knowledge_base_id.strip()
     if not name or not prompt_id or not knowledge_base_id:
         raise HTTPException(status_code=400, detail="Name, prompt_id and knowledge_base_id are required.")
 
-    prompt_exists = await db.execute(select(Prompt.id).where(Prompt.id == prompt_id))
+    prompt_exists = await db.execute(
+        select(Prompt.id).where(Prompt.id == prompt_id, Prompt.user_id == current_user.id)
+    )
     if prompt_exists.scalar_one_or_none() is None:
         raise HTTPException(status_code=404, detail="Prompt not found.")
 
-    agent = Agent(name=name, prompt_id=prompt_id, knowledge_base_id=knowledge_base_id)
+    agent = Agent(
+        name=name,
+        prompt_id=prompt_id,
+        knowledge_base_id=knowledge_base_id,
+        user_id=current_user.id,
+    )
     db.add(agent)
     try:
         await db.commit()
@@ -85,8 +103,14 @@ async def create_agent(body: AgentPayload, db: AsyncSession = Depends(get_db)):
 
 
 @router.delete("/{agent_id}")
-async def delete_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(delete(Agent).where(Agent.id == agent_id))
+async def delete_agent(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        delete(Agent).where(Agent.id == agent_id, Agent.user_id == current_user.id)
+    )
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="Agent not found.")
     await db.commit()
@@ -94,13 +118,22 @@ async def delete_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{agent_id}/stream")
-async def stream_agent(agent_id: str, req: AgentStreamRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+async def stream_agent(
+    agent_id: str,
+    req: AgentStreamRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(Agent).where(Agent.id == agent_id, Agent.user_id == current_user.id)
+    )
     agent = result.scalar_one_or_none()
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found.")
 
-    prompt_result = await db.execute(select(Prompt.content).where(Prompt.id == agent.prompt_id))
+    prompt_result = await db.execute(
+        select(Prompt.content).where(Prompt.id == agent.prompt_id, Prompt.user_id == current_user.id)
+    )
     system_prompt = prompt_result.scalar_one_or_none()
     if not system_prompt:
         raise HTTPException(status_code=404, detail="Agent prompt not found.")

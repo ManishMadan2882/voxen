@@ -16,19 +16,27 @@ from rag.chunker import chunk_pdf, chunk_text
 from rag.document_model import Document, DocType
 from rag.embedder import embed
 from rag.store import upsert, search
+from users.auth import get_current_user
+from users.user_model import User
 
 router = APIRouter(prefix="/rag")
 
 
-async def _resolve_doc_id(db: AsyncSession, source: str) -> str:
-    existing = await db.execute(select(Document.id).where(Document.source == source))
+async def _resolve_doc_id(db: AsyncSession, user_id: str, source: str) -> str:
+    existing = await db.execute(
+        select(Document.id).where(Document.user_id == user_id, Document.source == source)
+    )
     found = existing.scalar_one_or_none()
     return found or str(uuid.uuid4())
 
 
 # ── upload PDF ────────────────────────────────────────────────────
 @router.post("/upload")
-async def upload(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+async def upload(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
     content = await file.read()
@@ -36,7 +44,7 @@ async def upload(file: UploadFile = File(...), db: AsyncSession = Depends(get_db
     if not chunks:
         raise HTTPException(status_code=422, detail="No text could be extracted from the PDF.")
 
-    doc_id = await _resolve_doc_id(db, file.filename)
+    doc_id = await _resolve_doc_id(db, current_user.id, file.filename)
     points = [
         PointStruct(id=str(uuid.uuid4()), vector=embed(c["text"]), payload={**c, "doc_id": doc_id})
         for c in chunks
@@ -47,6 +55,7 @@ async def upload(file: UploadFile = File(...), db: AsyncSession = Depends(get_db
         insert(Document)
         .values(
             id=doc_id,
+            user_id=current_user.id,
             source=file.filename,
             filename=file.filename,
             type=DocType.pdf,
@@ -55,7 +64,7 @@ async def upload(file: UploadFile = File(...), db: AsyncSession = Depends(get_db
             uploaded_at=datetime.now(timezone.utc),
         )
         .on_conflict_do_update(
-            index_elements=["source"],
+            index_elements=["user_id", "source"],
             set_={"chunk_count": len(points), "file_size": len(content), "uploaded_at": datetime.now(timezone.utc)},
         )
     )
@@ -72,11 +81,15 @@ class TextPayload(BaseModel):
 
 
 @router.post("/add-text")
-async def add_text(body: TextPayload, db: AsyncSession = Depends(get_db)):
+async def add_text(
+    body: TextPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty.")
     chunks = chunk_text(body.text.strip(), body.source)
-    doc_id = await _resolve_doc_id(db, body.source)
+    doc_id = await _resolve_doc_id(db, current_user.id, body.source)
     points = [
         PointStruct(id=str(uuid.uuid4()), vector=embed(c["text"]), payload={**c, "doc_id": doc_id})
         for c in chunks
@@ -87,6 +100,7 @@ async def add_text(body: TextPayload, db: AsyncSession = Depends(get_db)):
         insert(Document)
         .values(
             id=doc_id,
+            user_id=current_user.id,
             source=body.source,
             filename=body.source,
             type=DocType.text,
@@ -95,7 +109,7 @@ async def add_text(body: TextPayload, db: AsyncSession = Depends(get_db)):
             uploaded_at=datetime.now(timezone.utc),
         )
         .on_conflict_do_update(
-            index_elements=["source"],
+            index_elements=["user_id", "source"],
             set_={"chunk_count": len(points), "uploaded_at": datetime.now(timezone.utc)},
         )
     )
@@ -107,8 +121,15 @@ async def add_text(body: TextPayload, db: AsyncSession = Depends(get_db)):
 
 # ── list indexed sources ──────────────────────────────────────────
 @router.get("/documents")
-async def documents(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Document).order_by(Document.uploaded_at.desc()))
+async def documents(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(Document)
+        .where(Document.user_id == current_user.id)
+        .order_by(Document.uploaded_at.desc())
+    )
     docs = result.scalars().all()
     return [
         {
@@ -147,10 +168,20 @@ def _get_provider(model_override: str | None = None):
 
 
 @router.post("/query")
-def query_kb(req: QueryRequest):
+async def query_kb(
+    req: QueryRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     last_user = next((m.content for m in reversed(req.messages) if m.role == "user"), None)
     if not last_user:
         raise HTTPException(status_code=400, detail="No user message found.")
+
+    owns = await db.execute(
+        select(Document.id).where(Document.id == req.id, Document.user_id == current_user.id)
+    )
+    if owns.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
 
     hits = search(embed(last_user), id_filters=[req.id], score_threshold=0.4)
 
