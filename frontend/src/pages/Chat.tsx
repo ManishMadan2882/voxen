@@ -13,6 +13,15 @@ type UploadState = 'idle' | 'uploading' | 'done' | 'error'
 type Doc = { id: string; file: string; chunks: number }
 type CustomPrompt = { id: string; name: string; content: string; created_at: string }
 type Agent = { id: string; name: string; prompt_id: string; knowledge_base_id: string; created_at: string }
+type ApiKey = {
+    id: string
+    agent_id: string
+    name: string
+    key_prefix: string
+    is_active: boolean
+    created_at: string
+    last_used_at: string | null
+}
 
 const MODELS = ['llama3.2', 'gemma3']
 
@@ -64,6 +73,16 @@ export const Chat = () => {
     const [agentKbId, setAgentKbId] = useState('')
     const [agentState, setAgentState] = useState<UploadState>('idle')
     const [agentMsg, setAgentMsg] = useState('')
+
+    // ── publish/api-keys state ───────────────────────────────────
+    const [publishAgent, setPublishAgent] = useState<Agent | null>(null)
+    const [keys, setKeys] = useState<ApiKey[]>([])
+    const [keysLoading, setKeysLoading] = useState(false)
+    const [keyName, setKeyName] = useState('')
+    const [keyCreating, setKeyCreating] = useState(false)
+    const [keyError, setKeyError] = useState('')
+    const [newKey, setNewKey] = useState<string>('')
+    const [copied, setCopied] = useState(false)
 
     const navigate = useNavigate()
 
@@ -169,6 +188,81 @@ export const Chat = () => {
             const res = await fetch(`http://localhost:8000/agents/${id}`, { method: 'DELETE' })
             if (!res.ok) return
             fetchAgents()
+        } catch { /* noop */ }
+    }
+
+    const fetchKeys = useCallback(async (agentId: string) => {
+        setKeysLoading(true)
+        try {
+            const res = await fetch(`http://localhost:8000/agents/${agentId}/keys`)
+            if (!res.ok) throw new Error('Failed to load keys')
+            setKeys(await res.json())
+        } catch (e: any) {
+            setKeyError(e.message ?? 'Failed to load keys')
+        } finally {
+            setKeysLoading(false)
+        }
+    }, [])
+
+    const openPublish = (agent: Agent) => {
+        setPublishAgent(agent)
+        setKeys([])
+        setNewKey('')
+        setKeyName('')
+        setKeyError('')
+        setCopied(false)
+        fetchKeys(agent.id)
+    }
+
+    const closePublish = () => {
+        setPublishAgent(null)
+        setKeys([])
+        setNewKey('')
+        setKeyName('')
+        setKeyError('')
+        setCopied(false)
+    }
+
+    const handleCreateKey = async () => {
+        if (!publishAgent) return
+        const name = keyName.trim()
+        if (!name) { setKeyError('Name is required.'); return }
+        setKeyCreating(true)
+        setKeyError('')
+        try {
+            const res = await fetch(`http://localhost:8000/agents/${publishAgent.id}/keys`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name }),
+            })
+            if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed') }
+            const data = await res.json()
+            setNewKey(data.key)
+            setKeyName('')
+            setCopied(false)
+            fetchKeys(publishAgent.id)
+        } catch (e: any) {
+            setKeyError(e.message ?? 'Failed to create key')
+        } finally {
+            setKeyCreating(false)
+        }
+    }
+
+    const handleRevokeKey = async (keyId: string) => {
+        if (!publishAgent) return
+        try {
+            const res = await fetch(`http://localhost:8000/agents/${publishAgent.id}/keys/${keyId}`, { method: 'DELETE' })
+            if (!res.ok) return
+            fetchKeys(publishAgent.id)
+        } catch { /* noop */ }
+    }
+
+    const copyNewKey = async () => {
+        if (!newKey) return
+        try {
+            await navigator.clipboard.writeText(newKey)
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1500)
         } catch { /* noop */ }
     }
 
@@ -834,6 +928,10 @@ export const Chat = () => {
                                                                 className="text-xs px-2.5 py-1 rounded-md border border-purple-500/40 text-purple-300 hover:bg-purple-500/10 transition-colors"
                                                             >Open</button>
                                                             <button
+                                                                onClick={() => openPublish(a)}
+                                                                className="text-xs px-2.5 py-1 rounded-md bg-linear-to-r from-purple-600 to-blue-600 text-white hover:from-purple-500 hover:to-blue-500 transition-all"
+                                                            >Publish</button>
+                                                            <button
                                                                 onClick={() => handleDeleteAgent(a.id)}
                                                                 className="text-xs px-2.5 py-1 rounded-md border border-white/10 text-white/40 hover:text-red-400 hover:border-red-400/30 transition-colors"
                                                             >Delete</button>
@@ -903,6 +1001,104 @@ export const Chat = () => {
                 )}
 
             </div>
+
+            {publishAgent && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+                    onClick={closePublish}
+                >
+                    <div
+                        className="w-full max-w-2xl max-h-[85vh] flex flex-col bg-gray-900 border border-white/10 rounded-2xl shadow-2xl"
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-white/8 shrink-0">
+                            <div className="min-w-0">
+                                <p className="text-white/30 text-xs uppercase tracking-wide">Publish agent</p>
+                                <p className="text-white text-sm font-medium truncate">{publishAgent.name}</p>
+                            </div>
+                            <button
+                                onClick={closePublish}
+                                className="text-white/40 hover:text-white text-lg leading-none px-2"
+                            >×</button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+                            {newKey && (
+                                <div className="p-4 rounded-xl border border-purple-500/40 bg-purple-500/10 space-y-2">
+                                    <p className="text-purple-200 text-xs uppercase tracking-wide">New API key — copy it now</p>
+                                    <p className="text-white/50 text-xs">This key is shown only once. Store it securely; it cannot be retrieved later.</p>
+                                    <div className="flex gap-2 items-center p-2 rounded-lg bg-gray-950/60 border border-white/10">
+                                        <code className="flex-1 text-purple-200 text-xs break-all font-mono">{newKey}</code>
+                                        <button
+                                            onClick={copyNewKey}
+                                            className="text-xs px-2.5 py-1 rounded-md bg-linear-to-r from-purple-600 to-blue-600 text-white hover:from-purple-500 hover:to-blue-500 transition-all shrink-0"
+                                        >{copied ? 'Copied' : 'Copy'}</button>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="space-y-2">
+                                <p className="text-white/30 text-xs uppercase tracking-wide">Create new key</p>
+                                <div className="flex gap-2 items-center p-2 rounded-2xl bg-white/5 border border-white/10 focus-within:border-purple-500/40 transition-colors">
+                                    <input
+                                        className="flex-1 bg-transparent text-white/80 placeholder-white/25 text-sm px-2 py-1 focus:outline-none"
+                                        type="text"
+                                        placeholder="Key name (e.g. production)"
+                                        value={keyName}
+                                        onChange={e => setKeyName(e.target.value)}
+                                        onKeyDown={e => { if (e.key === 'Enter') handleCreateKey() }}
+                                    />
+                                    <button
+                                        onClick={handleCreateKey}
+                                        disabled={!keyName.trim() || keyCreating}
+                                        className="bg-linear-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white text-xs font-medium rounded-xl px-3 py-1.5 disabled:opacity-40 transition-all shrink-0"
+                                    >{keyCreating ? '⟳' : 'Create key'}</button>
+                                </div>
+                                {keyError && <p className="text-xs text-red-400">{keyError}</p>}
+                            </div>
+
+                            <div className="space-y-2">
+                                <p className="text-white/30 text-xs uppercase tracking-wide">Existing keys</p>
+                                {keysLoading ? (
+                                    <p className="text-white/30 text-xs">Loading…</p>
+                                ) : keys.length === 0 ? (
+                                    <p className="text-white/30 text-xs">No keys yet.</p>
+                                ) : (
+                                    <div className="overflow-x-auto rounded-xl border border-white/8">
+                                        <table className="w-full text-xs">
+                                            <thead className="bg-white/5 text-white/40 uppercase tracking-wide">
+                                                <tr>
+                                                    <th className="text-left font-normal px-3 py-2">Name</th>
+                                                    <th className="text-left font-normal px-3 py-2">Prefix</th>
+                                                    <th className="text-left font-normal px-3 py-2">Created</th>
+                                                    <th className="text-left font-normal px-3 py-2">Last used</th>
+                                                    <th className="px-3 py-2"></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-white/8">
+                                                {keys.map(k => (
+                                                    <tr key={k.id} className="text-white/70">
+                                                        <td className="px-3 py-2 truncate max-w-40">{k.name}</td>
+                                                        <td className="px-3 py-2 font-mono text-purple-300">{k.key_prefix}…</td>
+                                                        <td className="px-3 py-2 text-white/50">{new Date(k.created_at).toLocaleDateString()}</td>
+                                                        <td className="px-3 py-2 text-white/50">{k.last_used_at ? new Date(k.last_used_at).toLocaleDateString() : '—'}</td>
+                                                        <td className="px-3 py-2 text-right">
+                                                            <button
+                                                                onClick={() => handleRevokeKey(k.id)}
+                                                                className="text-xs px-2 py-0.5 rounded-md border border-white/10 text-white/40 hover:text-red-400 hover:border-red-400/30 transition-colors"
+                                                            >Revoke</button>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }
