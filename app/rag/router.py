@@ -11,13 +11,17 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import httpx
+
 from db import get_db
-from rag.chunker import chunk_pdf, chunk_text
+from rag.chunker import chunk_text
 from rag.document_model import Document, DocType
 from rag.embedder import embed
+from rag.ingestors import SUPPORTED_EXTENSIONS, HttpWebIngestor, get_file_ingestor
 from rag.store import upsert, search
 from users.auth import get_current_user
 from users.user_model import User
+
 
 router = APIRouter(prefix="/rag")
 
@@ -30,21 +34,33 @@ async def _resolve_doc_id(db: AsyncSession, user_id: str, source: str) -> str:
     return found or str(uuid.uuid4())
 
 
-# ── upload PDF ────────────────────────────────────────────────────
+# ── upload file (pdf, docx, xlsx, csv, md, txt) ───────────────────
 @router.post("/upload")
 async def upload(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if not (file.filename or "").lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+    filename = file.filename or ""
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{ext or 'unknown'}'. Supported: {sorted(SUPPORTED_EXTENSIONS)}",
+        )
     content = await file.read()
-    chunks = chunk_pdf(content, file.filename)
+    try:
+        ingestor = get_file_ingestor(ext)
+        chunks = ingestor.ingest(content, filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Failed to parse file: {e}")
     if not chunks:
-        raise HTTPException(status_code=422, detail="No text could be extracted from the PDF.")
+        raise HTTPException(status_code=422, detail="No text could be extracted from the file.")
 
-    doc_id = await _resolve_doc_id(db, current_user.id, file.filename)
+    doc_type = ingestor.doc_type
+    doc_id = await _resolve_doc_id(db, current_user.id, filename)
     points = [
         PointStruct(id=str(uuid.uuid4()), vector=embed(c["text"]), payload={**c, "doc_id": doc_id})
         for c in chunks
@@ -56,9 +72,9 @@ async def upload(
         .values(
             id=doc_id,
             user_id=current_user.id,
-            source=file.filename,
-            filename=file.filename,
-            type=DocType.pdf,
+            source=filename,
+            filename=filename,
+            type=doc_type,
             chunk_count=len(points),
             file_size=len(content),
             uploaded_at=datetime.now(timezone.utc),
@@ -71,7 +87,63 @@ async def upload(
     await db.execute(stmt)
     await db.commit()
 
-    return {"id": doc_id, "file": file.filename, "chunks": len(points)}
+    return {"id": doc_id, "file": filename, "chunks": len(points)}
+
+
+# ── ingest a web URL ──────────────────────────────────────────────
+class UrlPayload(BaseModel):
+    url: str
+
+
+@router.post("/add-url")
+async def add_url(
+    body: UrlPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    url = body.url.strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="URL cannot be empty.")
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+
+    try:
+        chunks, title = HttpWebIngestor().ingest(url)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch URL: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Failed to scrape URL: {e}")
+    if not chunks:
+        raise HTTPException(status_code=422, detail="No text could be extracted from the URL.")
+
+    doc_id = await _resolve_doc_id(db, current_user.id, url)
+    points = [
+        PointStruct(id=str(uuid.uuid4()), vector=embed(c["text"]), payload={**c, "doc_id": doc_id})
+        for c in chunks
+    ]
+    upsert(points)
+
+    stmt = (
+        insert(Document)
+        .values(
+            id=doc_id,
+            user_id=current_user.id,
+            source=url,
+            filename=title or url,
+            type=DocType.url,
+            chunk_count=len(points),
+            file_size=None,
+            uploaded_at=datetime.now(timezone.utc),
+        )
+        .on_conflict_do_update(
+            index_elements=["user_id", "source"],
+            set_={"chunk_count": len(points), "uploaded_at": datetime.now(timezone.utc)},
+        )
+    )
+    await db.execute(stmt)
+    await db.commit()
+
+    return {"id": doc_id, "source": url, "title": title, "chunks": len(points)}
 
 
 # ── add plain text ────────────────────────────────────────────────

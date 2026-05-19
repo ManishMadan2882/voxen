@@ -11,6 +11,11 @@ from db import Base
 class DocType(str, enum.Enum):
     pdf = "pdf"
     text = "text"
+    docx = "docx"
+    xlsx = "xlsx"
+    csv = "csv"
+    markdown = "markdown"
+    url = "url"
 
 
 class Document(Base):

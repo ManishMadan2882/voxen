@@ -6,7 +6,9 @@ type Status = 'idle' | 'listening' | 'processing' | 'speaking'
 type Source = { source: string; page: number; score: number | null }
 type Message = { role: 'user' | 'assistant'; content: string; sources?: Source[] }
 type NavItem = 'demo' | 'rag' | 'prompts' | 'agents'
-type KbMode = 'pdf' | 'text'
+type KbMode = 'file' | 'text' | 'url'
+
+const SUPPORTED_EXTS = ['.pdf', '.docx', '.xlsx', '.xls', '.csv', '.md', '.markdown', '.txt']
 type UploadState = 'idle' | 'uploading' | 'done' | 'error'
 type Doc = { id: string; file: string; chunks: number }
 type CustomPrompt = { id: string; name: string; content: string; created_at: string }
@@ -38,11 +40,14 @@ export const Chat = () => {
     const [uploadState, setUploadState] = useState<UploadState>('idle')
     const [uploadMsg, setUploadMsg] = useState('')
     const fileInputRef = useRef<HTMLInputElement>(null)
-    const [kbMode, setKbMode] = useState<KbMode>('pdf')
+    const [kbMode, setKbMode] = useState<KbMode>('file')
     const [kbInput, setKbInput] = useState('')
     const [kbSource, setKbSource] = useState('')
     const [kbState, setKbState] = useState<UploadState>('idle')
     const [kbMsg, setKbMsg] = useState('')
+    const [kbUrl, setKbUrl] = useState('')
+    const [urlState, setUrlState] = useState<UploadState>('idle')
+    const [urlMsg, setUrlMsg] = useState('')
 
     // ── prompts state ────────────────────────────────────────────
     const [prompts, setPrompts] = useState<CustomPrompt[]>([])
@@ -168,8 +173,9 @@ export const Chat = () => {
     }
 
     const handleUpload = async (file: File) => {
-        if (!file.name.toLowerCase().endsWith('.pdf')) {
-            setUploadMsg('Only PDF files are supported.')
+        const lower = file.name.toLowerCase()
+        if (!SUPPORTED_EXTS.some(ext => lower.endsWith(ext))) {
+            setUploadMsg(`Unsupported file type. Allowed: ${SUPPORTED_EXTS.join(', ')}`)
             setUploadState('error')
             return
         }
@@ -213,6 +219,29 @@ export const Chat = () => {
         } catch (e: any) {
             setKbMsg(e.message ?? 'Failed')
             setKbState('error')
+        }
+    }
+
+    const handleAddUrl = async () => {
+        const url = kbUrl.trim()
+        if (!url) return
+        setUrlState('uploading')
+        setUrlMsg(`Scraping ${url}…`)
+        try {
+            const res = await fetch('http://localhost:8000/rag/add-url', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url }),
+            })
+            if (!res.ok) { const e = await res.json(); throw new Error(e.detail ?? 'Failed') }
+            const { chunks, title } = await res.json()
+            setUrlMsg(`${title ?? url} — ${chunks} chunk${chunks !== 1 ? 's' : ''} indexed`)
+            setUrlState('done')
+            setKbUrl('')
+            fetchDocs()
+        } catch (e: any) {
+            setUrlMsg(e.message ?? 'Failed')
+            setUrlState('error')
         }
     }
 
@@ -608,19 +637,19 @@ export const Chat = () => {
                             )}
                         </div>
 
-                        {/* Add document — PDF / Text toggle */}
+                        {/* Add document — File / Text / URL toggle */}
                         <div className="shrink-0 border-t border-white/8 px-6 py-4 max-w-2xl w-full mx-auto space-y-3">
                             <div className="flex justify-center">
                                 <div className="flex gap-1 bg-white/5 p-1 rounded-xl border border-white/10">
-                                    {(['pdf', 'text'] as KbMode[]).map(m => (
-                                        <button key={m} onClick={() => { setKbMode(m); setUploadMsg(''); setKbMsg('') }}
+                                    {(['file', 'text', 'url'] as KbMode[]).map(m => (
+                                        <button key={m} onClick={() => { setKbMode(m); setUploadMsg(''); setKbMsg(''); setUrlMsg('') }}
                                             className={`px-5 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 uppercase tracking-wide ${kbMode === m ? 'bg-linear-to-r from-purple-600 to-blue-600 text-white shadow-md' : 'text-white/40 hover:text-white/70'}`}
                                         >{m}</button>
                                     ))}
                                 </div>
                             </div>
 
-                            {kbMode === 'pdf' && (
+                            {kbMode === 'file' && (
                                 <div>
                                     <div
                                         className="border border-dashed border-white/15 rounded-2xl px-6 py-7 flex flex-col items-center gap-2 cursor-pointer hover:border-purple-500/40 hover:bg-purple-500/5 transition-all"
@@ -629,14 +658,41 @@ export const Chat = () => {
                                         onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleUpload(f) }}
                                     >
                                         <span className="text-xl text-white/30">⬡</span>
-                                        <p className="text-white/50 text-sm">Drop a PDF or <span className="text-purple-400">browse</span></p>
-                                        <input ref={fileInputRef} type="file" accept=".pdf" className="hidden"
+                                        <p className="text-white/50 text-sm">Drop a file or <span className="text-purple-400">browse</span></p>
+                                        <p className="text-white/30 text-xs">PDF, DOCX, XLSX, CSV, MD, TXT</p>
+                                        <input ref={fileInputRef} type="file" accept={SUPPORTED_EXTS.join(',')} className="hidden"
                                             onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.target.value = '' }} />
                                     </div>
                                     {uploadMsg && (
                                         <p className={`mt-2 text-xs ${uploadState === 'error' ? 'text-red-400' : uploadState === 'done' ? 'text-green-400' : 'text-white/40'}`}>
                                             {uploadState === 'uploading' && <span className="mr-1 animate-spin inline-block">⟳</span>}
                                             {uploadMsg}
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+
+                            {kbMode === 'url' && (
+                                <div className="space-y-2">
+                                    <div className="flex gap-2 items-center p-2 rounded-2xl bg-white/5 border border-white/10 focus-within:border-purple-500/40 transition-colors">
+                                        <input
+                                            className="flex-1 bg-transparent text-white/80 placeholder-white/25 text-sm px-2 py-1 focus:outline-none"
+                                            type="url"
+                                            placeholder="https://example.com/article"
+                                            value={kbUrl}
+                                            onChange={e => setKbUrl(e.target.value)}
+                                            onKeyDown={e => { if (e.key === 'Enter') handleAddUrl() }}
+                                        />
+                                        <button
+                                            className="bg-linear-to-r from-purple-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white text-xs font-medium rounded-xl px-3 py-1.5 disabled:opacity-40 transition-all shrink-0"
+                                            onClick={handleAddUrl}
+                                            disabled={!kbUrl.trim() || urlState === 'uploading'}
+                                        >{urlState === 'uploading' ? '⟳' : 'Scrape'}</button>
+                                    </div>
+                                    {urlMsg && (
+                                        <p className={`text-xs ${urlState === 'error' ? 'text-red-400' : urlState === 'done' ? 'text-green-400' : 'text-white/40'}`}>
+                                            {urlState === 'uploading' && <span className="mr-1 animate-spin inline-block">⟳</span>}
+                                            {urlMsg}
                                         </p>
                                     )}
                                 </div>
