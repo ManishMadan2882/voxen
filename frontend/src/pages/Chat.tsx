@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import { useNavigate } from "react-router-dom"
+import { Markdown } from "../components/Markdown"
 
 type Mode = 'voice' | 'chat'
 type Status = 'idle' | 'listening' | 'processing' | 'speaking'
@@ -43,7 +44,7 @@ export const Chat = () => {
     const [liveTranscript, setLiveTranscript] = useState('')
     const [model, setModel] = useState('llama3.2')
     const [selectedSources, setSelectedSources] = useState<string[]>([])
-
+    console.log("sda")
     // ── rag state ────────────────────────────────────────────────
     const [docs, setDocs] = useState<Doc[]>([])
     const [uploadState, setUploadState] = useState<UploadState>('idle')
@@ -83,6 +84,7 @@ export const Chat = () => {
     const [keyError, setKeyError] = useState('')
     const [newKey, setNewKey] = useState<string>('')
     const [copied, setCopied] = useState(false)
+    const [embedCopied, setEmbedCopied] = useState(false)
 
     const navigate = useNavigate()
 
@@ -263,6 +265,18 @@ export const Chat = () => {
             await navigator.clipboard.writeText(newKey)
             setCopied(true)
             setTimeout(() => setCopied(false), 1500)
+        } catch { /* noop */ }
+    }
+
+    const embedSnippet = (key: string, title: string) =>
+        `<script src="http://localhost:8000/widget/embed.js" data-key="${key}" data-title="${title.replace(/"/g, '&quot;')}" async></` + `script>`
+
+    const copyEmbed = async () => {
+        if (!newKey || !publishAgent) return
+        try {
+            await navigator.clipboard.writeText(embedSnippet(newKey, publishAgent.name))
+            setEmbedCopied(true)
+            setTimeout(() => setEmbedCopied(false), 1500)
         } catch { /* noop */ }
     }
 
@@ -591,15 +605,18 @@ export const Chat = () => {
                             )}
                             {messages.map((msg, i) => (
                                 <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                                    <div className={`rounded-2xl px-4 py-2.5 max-w-[75%] text-sm leading-relaxed whitespace-pre-wrap ${
+                                    <div className={`rounded-2xl px-4 py-2.5 max-w-[75%] text-sm leading-relaxed ${
                                         msg.role === 'user'
-                                            ? 'bg-linear-to-br from-purple-600 to-blue-600 text-white shadow-lg shadow-purple-500/20'
+                                            ? 'bg-linear-to-br from-purple-600 to-blue-600 text-white shadow-lg shadow-purple-500/20 whitespace-pre-wrap'
                                             : 'bg-white/5 text-white/85 border border-white/10'
                                     }`}>
-                                        {msg.content || (status === 'processing' && i === messages.length - 1
-                                            ? <span className="animate-pulse text-purple-400">▌</span>
-                                            : ''
-                                        )}
+                                        {msg.role === 'assistant'
+                                            ? (msg.content
+                                                ? <Markdown>{msg.content}</Markdown>
+                                                : (status === 'processing' && i === messages.length - 1
+                                                    ? <span className="animate-pulse text-purple-400">▌</span>
+                                                    : ''))
+                                            : msg.content}
                                     </div>
                                     {msg.sources && msg.sources.length > 0 && (
                                         <div className="flex flex-wrap gap-1.5 mt-1.5 max-w-[75%]">
@@ -1033,6 +1050,20 @@ export const Chat = () => {
                                             onClick={copyNewKey}
                                             className="text-xs px-2.5 py-1 rounded-md bg-linear-to-r from-purple-600 to-blue-600 text-white hover:from-purple-500 hover:to-blue-500 transition-all shrink-0"
                                         >{copied ? 'Copied' : 'Copy'}</button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {newKey && publishAgent && (
+                                <div className="p-4 rounded-xl border border-white/10 bg-white/5 space-y-2">
+                                    <p className="text-white/60 text-xs uppercase tracking-wide">Embed snippet</p>
+                                    <p className="text-white/40 text-xs">Paste this on your site to render the chat widget. Visitors will see a chat bubble that opens the agent — nothing about prompts, knowledge bases, or the agent owner is exposed.</p>
+                                    <div className="flex gap-2 items-start p-2 rounded-lg bg-gray-950/60 border border-white/10">
+                                        <code className="flex-1 text-white/80 text-xs break-all font-mono whitespace-pre-wrap">{embedSnippet(newKey, publishAgent.name)}</code>
+                                        <button
+                                            onClick={copyEmbed}
+                                            className="text-xs px-2.5 py-1 rounded-md border border-white/10 text-white/70 hover:text-white hover:border-white/30 transition-colors shrink-0"
+                                        >{embedCopied ? 'Copied' : 'Copy'}</button>
                                     </div>
                                 </div>
                             )}

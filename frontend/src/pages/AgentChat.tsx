@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import { Link, useParams } from "react-router-dom"
+import { Markdown } from "../components/Markdown"
 
 type Mode = 'voice' | 'chat'
 type Status = 'idle' | 'listening' | 'processing' | 'speaking'
@@ -229,15 +230,18 @@ export const AgentChat = () => {
                     )}
                     {messages.map((msg, i) => (
                         <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                            <div className={`rounded-2xl px-4 py-2.5 max-w-[75%] text-sm leading-relaxed whitespace-pre-wrap ${
+                            <div className={`rounded-2xl px-4 py-2.5 max-w-[75%] text-sm leading-relaxed ${
                                 msg.role === 'user'
-                                    ? 'bg-linear-to-br from-purple-600 to-blue-600 text-white shadow-lg shadow-purple-500/20'
+                                    ? 'bg-linear-to-br from-purple-600 to-blue-600 text-white shadow-lg shadow-purple-500/20 whitespace-pre-wrap'
                                     : 'bg-white/5 text-white/85 border border-white/10'
                             }`}>
-                                {msg.content || (status === 'processing' && i === messages.length - 1
-                                    ? <span className="animate-pulse text-purple-400">▌</span>
-                                    : ''
-                                )}
+                                {msg.role === 'assistant'
+                                    ? (msg.content
+                                        ? <Markdown>{msg.content}</Markdown>
+                                        : (status === 'processing' && i === messages.length - 1
+                                            ? <span className="animate-pulse text-purple-400">▌</span>
+                                            : ''))
+                                    : msg.content}
                             </div>
                             {msg.sources && msg.sources.length > 0 && (
                                 <div className="flex flex-wrap gap-1.5 mt-1.5 max-w-[75%]">
