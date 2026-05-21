@@ -28,6 +28,7 @@ from prompts.prompt_model import Prompt  # noqa: E402
 from prompts.router import router as prompts_router  # noqa: E402
 from agents.router import router as agents_router  # noqa: E402
 from agents.api_key_router import management_router as api_key_mgmt_router, public_router as api_key_public_router  # noqa: E402
+from widget_router import router as widget_router  # noqa: E402
 from providers.ollama import OllamaProvider  # noqa: E402
 from providers.gemini import GeminiProvider  # noqa: E402
 from rag.router import router as rag_router  # noqa: E402
@@ -51,6 +52,7 @@ app.include_router(prompts_router)
 app.include_router(agents_router)
 app.include_router(api_key_mgmt_router)
 app.include_router(api_key_public_router)
+app.include_router(widget_router)
 
 app.add_middleware(
     CORSMiddleware,
