@@ -29,8 +29,7 @@ from prompts.router import router as prompts_router  # noqa: E402
 from agents.router import router as agents_router  # noqa: E402
 from agents.api_key_router import management_router as api_key_mgmt_router, public_router as api_key_public_router  # noqa: E402
 from widget_router import router as widget_router  # noqa: E402
-from providers.ollama import OllamaProvider  # noqa: E402
-from providers.gemini import GeminiProvider  # noqa: E402
+from providers import get_provider  # noqa: E402
 from rag.router import router as rag_router  # noqa: E402
 from rag.embedder import embed  # noqa: E402
 from rag.store import search  # noqa: E402
@@ -54,20 +53,18 @@ app.include_router(api_key_mgmt_router)
 app.include_router(api_key_public_router)
 app.include_router(widget_router)
 
+_cors_origins = [
+    o.strip()
+    for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-def _get_provider(model_override: str | None = None):
-    provider = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
-    model = model_override or os.getenv("LLM_MODEL", "gemma3").strip()
-    if provider == "gemini":
-        return GeminiProvider(os.getenv("GEMINI_API_KEY", ""), model)
-    return OllamaProvider(os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"), model)
 
 
 @app.get("/health")
@@ -89,7 +86,7 @@ async def stream(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    provider = _get_provider(req.model)
+    provider = get_provider(req.model)
 
     system_prompt = SYSTEM_PROMPT
     if req.prompt_id:

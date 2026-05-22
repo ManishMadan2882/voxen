@@ -1,0 +1,119 @@
+name: voxen-prod
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-voxen}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    restart: always
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  # Optional — only needed for the Ollama LLM provider and/or the RAG embedder
+  # (the embedder currently always calls Ollama for nomic-embed-text). Enable
+  # with `--profile ollama` or COMPOSE_PROFILES=ollama. If you point
+  # OLLAMA_BASE_URL at an external Ollama host, omit the profile entirely.
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    restart: always
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+      start_period: 15s
+    # Uncomment for GPU
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # One-shot: ensures EMBED_MODEL (and LLM_MODEL when using the ollama provider)
+  # are pulled before the backend comes up. Idempotent — `ollama pull` is a no-op
+  # if the model is already present in the ollama_data volume.
+  ollama-init:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      LLM_MODEL: ${LLM_MODEL:-gemini-1.5-flash}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "Pulling embedding model: $$EMBED_MODEL"
+        ollama pull "$$EMBED_MODEL"
+        if [ "$$LLM_PROVIDER" = "ollama" ]; then
+          echo "Pulling LLM model: $$LLM_MODEL"
+          ollama pull "$$LLM_MODEL"
+        fi
+        echo "Models ready."
+    restart: "no"
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers ${BACKEND_WORKERS:-2}
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-voxen}
+      QDRANT_URL: http://qdrant:6333
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      LLM_MODEL: ${LLM_MODEL:-gemini-1.5-flash}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      EMBED_MODEL: ${EMBED_MODEL:-nomic-embed-text}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS in .env}
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      ollama-init:
+        condition: service_completed_successfully
+        required: false
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:?set VITE_API_URL in .env}
+    restart: always
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  ollama_data:

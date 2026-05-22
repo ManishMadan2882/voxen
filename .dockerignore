@@ -1,0 +1,17 @@
+.venv
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.git
+.gitignore
+.env
+.env.*
+frontend/node_modules
+frontend/dist
+tests
+.vscode
+.idea
+*.md
+!README.md

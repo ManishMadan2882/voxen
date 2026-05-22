@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,8 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db import get_db
 from agents.agent_model import Agent
 from prompts.prompt_model import Prompt
-from providers.gemini import GeminiProvider
-from providers.ollama import OllamaProvider
+from providers import get_provider
 from rag.embedder import embed
 from rag.store import search
 from users.auth import get_current_user
@@ -47,14 +45,6 @@ def _serialize(a: Agent) -> dict:
         "knowledge_base_id": a.knowledge_base_id,
         "created_at": a.created_at.isoformat(),
     }
-
-
-def _get_provider(model_override: str | None = None):
-    provider = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
-    model = model_override or os.getenv("LLM_MODEL", "gemma3").strip()
-    if provider == "gemini":
-        return GeminiProvider(os.getenv("GEMINI_API_KEY", ""), model)
-    return OllamaProvider(os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"), model)
 
 
 @router.get("")
@@ -156,7 +146,7 @@ async def stream_agent(
             logging.exception("RAG retrieval failed (agent=%s, kb=%s)", agent.id, agent.knowledge_base_id)
 
     messages = [{"role": "system", "content": system_prompt + rag_context}] + [m.model_dump() for m in req.messages]
-    provider = _get_provider(req.model)
+    provider = get_provider(req.model)
 
     def event_stream():
         if hits:

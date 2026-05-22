@@ -1,7 +1,6 @@
 import hashlib
 import json
 import logging
-import os
 import secrets
 from datetime import datetime, timezone
 from typing import Literal
@@ -17,8 +16,7 @@ from agents.agent_model import Agent
 from agents.api_key_model import AgentApiKey
 from db import get_db
 from prompts.prompt_model import Prompt
-from providers.gemini import GeminiProvider
-from providers.ollama import OllamaProvider
+from providers import get_provider
 from rag.embedder import embed
 from rag.store import search
 from users.auth import get_current_user
@@ -50,14 +48,6 @@ def _serialize_key(k: AgentApiKey) -> dict:
         "created_at": k.created_at.isoformat(),
         "last_used_at": k.last_used_at.isoformat() if k.last_used_at else None,
     }
-
-
-def _get_provider(model_override: str | None = None):
-    provider = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
-    model = model_override or os.getenv("LLM_MODEL", "gemma3").strip()
-    if provider == "gemini":
-        return GeminiProvider(os.getenv("GEMINI_API_KEY", ""), model)
-    return OllamaProvider(os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"), model)
 
 
 # ── auth dependency for public key-based access ───────────────────────────────
@@ -229,7 +219,7 @@ async def public_stream(
     messages = [{"role": "system", "content": system_prompt + rag_context}] + [
         m.model_dump() for m in req.messages
     ]
-    provider = _get_provider(req.model)
+    provider = get_provider(req.model)
 
     def event_stream():
         if hits:

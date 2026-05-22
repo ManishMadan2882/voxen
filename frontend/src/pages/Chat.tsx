@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import { useNavigate } from "react-router-dom"
 import { Markdown } from "../components/Markdown"
+import { API_BASE } from "../lib/api"
 
 type Mode = 'voice' | 'chat'
 type Status = 'idle' | 'listening' | 'processing' | 'speaking'
@@ -24,7 +25,7 @@ type ApiKey = {
     last_used_at: string | null
 }
 
-const MODELS = ['llama3.2', 'gemma3']
+const MODELS = ['llama3.2', 'gemini-2.0-flash']
 
 const NAV: { id: NavItem; label: string; icon: string }[] = [
     { id: 'demo',    label: 'Demo',    icon: '◎' },
@@ -97,7 +98,7 @@ export const Chat = () => {
 
     const fetchDocs = useCallback(async () => {
         try {
-            const res = await fetch('http://localhost:8000/rag/documents')
+            const res = await fetch(`${API_BASE}/rag/documents`)
             setDocs(await res.json())
         } catch { /* backend may not be ready yet */ }
     }, [])
@@ -106,7 +107,7 @@ export const Chat = () => {
 
     const fetchPrompts = useCallback(async () => {
         try {
-            const res = await fetch('http://localhost:8000/prompts')
+            const res = await fetch(`${API_BASE}/prompts`)
             const data: CustomPrompt[] = await res.json()
             setPrompts(data)
             setSelectedPromptId(prev => (prev && data.some(p => p.id === prev) ? prev : ''))
@@ -122,7 +123,7 @@ export const Chat = () => {
         setPromptState('uploading')
         setPromptMsg('Saving…')
         try {
-            const res = await fetch('http://localhost:8000/prompts', {
+            const res = await fetch(`${API_BASE}/prompts`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name, content }),
@@ -141,7 +142,7 @@ export const Chat = () => {
 
     const handleDeletePrompt = async (id: string) => {
         try {
-            const res = await fetch(`http://localhost:8000/prompts/${id}`, { method: 'DELETE' })
+            const res = await fetch(`${API_BASE}/prompts/${id}`, { method: 'DELETE' })
             if (!res.ok) return
             if (selectedPromptId === id) setSelectedPromptId('')
             fetchPrompts()
@@ -150,7 +151,7 @@ export const Chat = () => {
 
     const fetchAgents = useCallback(async () => {
         try {
-            const res = await fetch('http://localhost:8000/agents')
+            const res = await fetch(`${API_BASE}/agents`)
             setAgents(await res.json())
         } catch { /* backend may not be ready yet */ }
     }, [])
@@ -167,7 +168,7 @@ export const Chat = () => {
         setAgentState('uploading')
         setAgentMsg('Saving…')
         try {
-            const res = await fetch('http://localhost:8000/agents', {
+            const res = await fetch(`${API_BASE}/agents`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name, prompt_id: agentPromptId, knowledge_base_id: agentKbId }),
@@ -187,7 +188,7 @@ export const Chat = () => {
 
     const handleDeleteAgent = async (id: string) => {
         try {
-            const res = await fetch(`http://localhost:8000/agents/${id}`, { method: 'DELETE' })
+            const res = await fetch(`${API_BASE}/agents/${id}`, { method: 'DELETE' })
             if (!res.ok) return
             fetchAgents()
         } catch { /* noop */ }
@@ -196,7 +197,7 @@ export const Chat = () => {
     const fetchKeys = useCallback(async (agentId: string) => {
         setKeysLoading(true)
         try {
-            const res = await fetch(`http://localhost:8000/agents/${agentId}/keys`)
+            const res = await fetch(`${API_BASE}/agents/${agentId}/keys`)
             if (!res.ok) throw new Error('Failed to load keys')
             setKeys(await res.json())
         } catch (e: any) {
@@ -232,7 +233,7 @@ export const Chat = () => {
         setKeyCreating(true)
         setKeyError('')
         try {
-            const res = await fetch(`http://localhost:8000/agents/${publishAgent.id}/keys`, {
+            const res = await fetch(`${API_BASE}/agents/${publishAgent.id}/keys`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name }),
@@ -253,7 +254,7 @@ export const Chat = () => {
     const handleRevokeKey = async (keyId: string) => {
         if (!publishAgent) return
         try {
-            const res = await fetch(`http://localhost:8000/agents/${publishAgent.id}/keys/${keyId}`, { method: 'DELETE' })
+            const res = await fetch(`${API_BASE}/agents/${publishAgent.id}/keys/${keyId}`, { method: 'DELETE' })
             if (!res.ok) return
             fetchKeys(publishAgent.id)
         } catch { /* noop */ }
@@ -269,7 +270,7 @@ export const Chat = () => {
     }
 
     const embedSnippet = (key: string, title: string) =>
-        `<script src="http://localhost:8000/widget/embed.js" data-key="${key}" data-title="${title.replace(/"/g, '&quot;')}" async></` + `script>`
+        `<script src="${API_BASE}/widget/embed.js" data-key="${key}" data-title="${title.replace(/"/g, '&quot;')}" async></` + `script>`
 
     const copyEmbed = async () => {
         if (!newKey || !publishAgent) return
@@ -292,7 +293,7 @@ export const Chat = () => {
         const form = new FormData()
         form.append('file', file)
         try {
-            const res = await fetch('http://localhost:8000/rag/upload', { method: 'POST', body: form })
+            const res = await fetch(`${API_BASE}/rag/upload`, { method: 'POST', body: form })
             if (!res.ok) {
                 const err = await res.json()
                 throw new Error(err.detail ?? 'Upload failed')
@@ -312,7 +313,7 @@ export const Chat = () => {
         setKbState('uploading')
         setKbMsg('Embedding…')
         try {
-            const res = await fetch('http://localhost:8000/rag/add-text', {
+            const res = await fetch(`${API_BASE}/rag/add-text`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: kbInput.trim(), source: kbSource.trim() || 'manual entry' }),
@@ -336,7 +337,7 @@ export const Chat = () => {
         setUrlState('uploading')
         setUrlMsg(`Scraping ${url}…`)
         try {
-            const res = await fetch('http://localhost:8000/rag/add-url', {
+            const res = await fetch(`${API_BASE}/rag/add-url`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ url }),
@@ -363,7 +364,7 @@ export const Chat = () => {
         setMessages([...history, { role: 'assistant', content: '' }])
 
         try {
-            const res = await fetch('http://localhost:8000/stream', {
+            const res = await fetch(`${API_BASE}/stream`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

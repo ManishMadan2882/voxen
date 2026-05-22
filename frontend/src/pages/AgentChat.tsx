@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react"
 import { Link, useParams } from "react-router-dom"
 import { Markdown } from "../components/Markdown"
+import { API_BASE } from "../lib/api"
 
 type Mode = 'voice' | 'chat'
 type Status = 'idle' | 'listening' | 'processing' | 'speaking'
@@ -10,7 +11,7 @@ type Agent = { id: string; name: string; prompt_id: string; knowledge_base_id: s
 type Doc = { id: string; file: string; chunks: number }
 type CustomPrompt = { id: string; name: string; content: string; created_at: string }
 
-const MODELS = ['llama3.2', 'gemma3']
+const MODELS = ['llama3.2', 'gemini-2.0-flash']
 
 export const AgentChat = () => {
     const { agentId = '' } = useParams<{ agentId: string }>()
@@ -36,15 +37,15 @@ export const AgentChat = () => {
 
     const loadAgent = useCallback(async () => {
         try {
-            const res = await fetch('http://localhost:8000/agents')
+            const res = await fetch(`${API_BASE}/agents`)
             const list: Agent[] = await res.json()
             const found = list.find(a => a.id === agentId) ?? null
             setAgent(found)
             if (!found) { setAgentError('Agent not found.'); return }
 
             const [pRes, dRes] = await Promise.all([
-                fetch('http://localhost:8000/prompts'),
-                fetch('http://localhost:8000/rag/documents'),
+                fetch(`${API_BASE}/prompts`),
+                fetch(`${API_BASE}/rag/documents`),
             ])
             const prompts: CustomPrompt[] = await pRes.json()
             const docs: Doc[] = await dRes.json()
@@ -66,7 +67,7 @@ export const AgentChat = () => {
         setMessages([...history, { role: 'assistant', content: '' }])
 
         try {
-            const res = await fetch(`http://localhost:8000/agents/${agent.id}/stream`, {
+            const res = await fetch(`${API_BASE}/agents/${agent.id}/stream`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ messages: history, model }),

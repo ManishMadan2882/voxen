@@ -230,13 +230,8 @@ class QueryRequest(BaseModel):
 
 
 def _get_provider(model_override: str | None = None):
-    from providers.ollama import OllamaProvider
-    from providers.gemini import GeminiProvider
-    provider = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
-    model = model_override or os.getenv("LLM_MODEL", "gemma3").strip()
-    if provider == "gemini":
-        return GeminiProvider(os.getenv("GEMINI_API_KEY", ""), model)
-    return OllamaProvider(os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"), model)
+    from providers import get_provider
+    return get_provider(model_override)
 
 
 @router.post("/query")

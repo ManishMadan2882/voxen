@@ -15,8 +15,9 @@ class GeminiProvider:
         system_instruction = "\n".join(system_parts) or None
 
         model = genai.GenerativeModel(self.model, system_instruction=system_instruction)
+        # Gemini expects roles "user" / "model"; map "assistant" → "model".
         history = [
-            {"role": m["role"], "parts": [m["content"]]}
+            {"role": "model" if m["role"] == "assistant" else m["role"], "parts": [m["content"]]}
             for m in chat_messages[:-1]
         ]
         chat = model.start_chat(history=history)
