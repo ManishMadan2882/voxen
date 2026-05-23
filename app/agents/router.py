@@ -11,10 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_db
 from agents.agent_model import Agent
+from agents.tool_loader import load_agent_tool_providers
 from prompts.prompt_model import Prompt
 from providers import get_provider
 from rag.embedder import embed
 from rag.store import search
+from tools import ResponseOrchestrator
 from users.auth import get_current_user
 from users.user_model import User
 
@@ -147,12 +149,14 @@ async def stream_agent(
 
     messages = [{"role": "system", "content": system_prompt + rag_context}] + [m.model_dump() for m in req.messages]
     provider = get_provider(req.model)
+    tool_providers = await load_agent_tool_providers(db, agent)
+    orchestrator = ResponseOrchestrator(provider, tool_providers)
 
     def event_stream():
         if hits:
             sources = [{"source": h["source"], "page": h["page"], "score": h.get("score")} for h in hits]
             yield f"event: sources\ndata: {json.dumps(sources)}\n\n"
-        for token in provider.stream(messages):
+        for token in orchestrator.stream(messages):
             yield f"data: {token}\n\n"
         yield "data: [DONE]\n\n"
 

@@ -158,6 +158,74 @@ Once you've minted an API key for an agent, embed the chat bubble on any site:
 
 The script injects a fixed bottom-right button that toggles an iframe pointing at `/widget?key=…&title=…`. The widget calls `/v1/stream` with the key.
 
+## Deployment
+
+Two Compose stacks ship with the repo: [docker-compose.yml](docker-compose.yml) for local development (live-reload backend + Vite HMR frontend) and [docker-compose.prod.yml](docker-compose.prod.yml) for production (gunicorn-style multi-worker uvicorn + static frontend behind nginx).
+
+Both stacks bring up Postgres and Qdrant unconditionally. Ollama is **optional** and gated behind the `ollama` Compose profile — turn it on only if you're using the Ollama LLM provider or want to run the RAG embedder locally.
+
+#### LLM provider
+
+Pick one in `.env`:
+
+```bash
+# Gemini (default — no extra services needed)
+LLM_PROVIDER=gemini
+LLM_MODEL=gemini-1.5-flash
+GEMINI_API_KEY=...
+
+# Ollama (start the ollama service via the profile)
+LLM_PROVIDER=ollama
+LLM_MODEL=gemma3
+```
+
+#### Embedder caveat
+
+[app/rag/embedder.py](app/rag/embedder.py) always calls Ollama for `nomic-embed-text`, regardless of which LLM provider you choose. If you want RAG, you need an Ollama reachable at `OLLAMA_BASE_URL`. Two options:
+
+- Run it inside the stack: add `--profile ollama` or set `COMPOSE_PROFILES=ollama`.
+- Point at an external host: set `OLLAMA_BASE_URL=https://your-ollama-host` and skip the profile.
+
+Model pulls are automated. An `ollama-init` one-shot service runs `ollama pull "$EMBED_MODEL"` (and `$LLM_MODEL` when `LLM_PROVIDER=ollama`) once the Ollama server is healthy, and the backend's `depends_on` blocks startup until that pull completes — so the first `up` with `--profile ollama` may take a minute while the model downloads. Subsequent restarts are instant because weights live in the `ollama_data` volume and `ollama pull` is idempotent.
+
+### Dev
+
+```bash
+cp .env.example .env
+
+# Gemini-only (no ollama container)
+docker compose up --build
+
+# Ollama (or hybrid: Ollama for embeddings + Gemini for LLM)
+docker compose --profile ollama up --build
+```
+
+- Backend: `http://localhost:8000` (auto-reloads on `app/` changes via bind mount)
+- Frontend: `http://localhost:5173` (Vite HMR)
+- Postgres: `localhost:5432` · Qdrant: `localhost:6333` · Ollama: `localhost:11434`
+
+### Production
+
+```bash
+cp .env.example .env        # MUST set POSTGRES_USER / POSTGRES_PASSWORD
+docker compose -f docker-compose.prod.yml up -d --build
+# Add --profile ollama if you want the Ollama service to come up too.
+```
+
+- Frontend served by nginx on `${FRONTEND_PORT:-80}` (static build of `frontend/dist`)
+- Backend runs uvicorn with `${BACKEND_WORKERS:-2}` workers, exposed only inside the Compose network
+- Postgres / Qdrant / Ollama not exposed to the host — only reachable through the Compose network
+- Volumes `postgres_data`, `qdrant_data`, `ollama_data` persist state across restarts
+
+For GPU-accelerated Ollama, uncomment the `deploy.resources.reservations.devices` block in either compose file (requires `nvidia-container-toolkit` on the host).
+
+### Caveats before you ship
+
+- **Frontend hardcodes `http://localhost:8000`.** The pages in [frontend/src/pages/](frontend/src/pages/) call the backend by absolute URL. Before deploying behind a real domain, factor this out (e.g. `import.meta.env.VITE_API_URL`) and either point at your public backend URL or have nginx proxy `/api/*` to the backend service.
+- **CORS allows only `http://localhost:5173`.** See [app/main.py](app/main.py#L57-L62) — widen `allow_origins` (ideally via env var) for production origins, including any site embedding the widget.
+- **Auth is a local-dev sentinel.** Every request resolves to one user. Wire up real JWT verification in [app/users/auth.py](app/users/auth.py) before exposing this publicly.
+- **Secrets.** Don't commit `.env`. Rotate `POSTGRES_PASSWORD` and any `GEMINI_API_KEY` if they ever land in version control.
+
 ## Notes & roadmap
 
 - Swap the local-dev auth shim in [app/users/auth.py](app/users/auth.py) for real JWT verification (e.g. Clerk).

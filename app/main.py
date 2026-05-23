@@ -23,11 +23,13 @@ import rag.document_model  # noqa: F401, E402 — registers ORM model with Base
 import prompts.prompt_model  # noqa: F401, E402 — registers ORM model with Base
 import agents.agent_model  # noqa: F401, E402 — registers ORM model with Base
 import agents.api_key_model  # noqa: F401, E402 — registers ORM model with Base
+import agents.tool_model  # noqa: F401, E402 — registers ORM model with Base
 from models import StreamRequest  # noqa: E402
 from prompts.prompt_model import Prompt  # noqa: E402
 from prompts.router import router as prompts_router  # noqa: E402
 from agents.router import router as agents_router  # noqa: E402
 from agents.api_key_router import management_router as api_key_mgmt_router, public_router as api_key_public_router  # noqa: E402
+from agents.tool_router import router as agent_tools_router  # noqa: E402
 from widget_router import router as widget_router  # noqa: E402
 from providers import get_provider  # noqa: E402
 from rag.router import router as rag_router  # noqa: E402
@@ -51,6 +53,7 @@ app.include_router(prompts_router)
 app.include_router(agents_router)
 app.include_router(api_key_mgmt_router)
 app.include_router(api_key_public_router)
+app.include_router(agent_tools_router)
 app.include_router(widget_router)
 
 _cors_origins = [
@@ -70,6 +73,21 @@ app.add_middleware(
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+_LLM_PROVIDERS = (
+    ("gemini", "GEMINI_API_KEY", "gemini-2.0-flash"),
+    ("ollama", "OLLAMA_BASE_URL", "llama3.2"),
+)
+
+
+@app.get("/llm")
+def list_llm():
+    return [
+        {"provider": name, "model": model}
+        for name, env_var, model in _LLM_PROVIDERS
+        if os.getenv(env_var)
+    ]
 
 
 SYSTEM_PROMPT = (
